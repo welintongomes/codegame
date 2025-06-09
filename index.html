@@ -601,6 +601,60 @@
                 this.editingQuestionId = null;
                 this.currentTab = 'game'; // Nova propriedade para controlar abas
                 this.autoSpeechEnabled = false;//controlar leitura automática
+                // Perguntas padrão (serão adicionadas automaticamente)
+                this.defaultQuestions = [
+                    {
+                        type: 'what_does',
+                        code: `function soma(a, b) {
+    return a + b;
+}
+console.log(soma(5, 3));`,
+                        question: 'O que este código JavaScript faz?',
+                        options: [
+                            'Multiplica dois números',
+                            'Soma dois números e exibe o resultado',
+                            'Subtrai dois números',
+                            'Divide dois números'
+                        ],
+                        correctAnswer: 1,
+                        correctFeedback: 'Parabéns! Você acertou!',
+                        incorrectFeedback: 'Não foi dessa vez, mas continue tentando!',
+                        explanation: 'A função soma() recebe dois parâmetros, os soma com o operador + e retorna o resultado. O console.log() exibe o valor 8.'
+                    },
+                    {
+                        type: 'complete_code',
+                        code: `for (let i = 0; i < 5; i++) {
+    console.log(___);
+}`,
+                        question: 'Complete o código para imprimir os números de 0 a 4:',
+                        options: [
+                            'i + 1',
+                            'i',
+                            '5',
+                            'i - 1'
+                        ],
+                        correctAnswer: 1,
+                        correctFeedback: 'Perfeito! Você completou corretamente!',
+                        incorrectFeedback: 'Não foi dessa vez, tente novamente!',
+                        explanation: 'A variável i já contém os valores de 0 a 4 durante o loop, então basta imprimir i.'
+                    },
+                    {
+                        type: 'what_does',
+                        code: `let frutas = ['maçã', 'banana', 'laranja'];
+console.log(frutas.length);`,
+                        question: 'Qual será o resultado deste código?',
+                        options: [
+                            'maçã, banana, laranja',
+                            '3',
+                            'undefined',
+                            'frutas'
+                        ],
+                        correctAnswer: 1,
+                        correctFeedback: 'Excelente! Você entende arrays!',
+                        incorrectFeedback: 'Quase lá! Lembre-se do que .length retorna.',
+                        explanation: 'O método .length retorna a quantidade de elementos no array. Como há 3 frutas, o resultado é 3.'
+                    }
+                ];
 
                 this.initDB().then(() => {
                     this.loadQuestions();
@@ -716,22 +770,45 @@
                 const store = transaction.objectStore('questions');
                 const request = store.getAll();
 
-                request.onsuccess = () => {
+                request.onsuccess = async () => {
                     this.questions = request.result;
-                    this.filteredQuestions = [...this.questions];
-                    this.updateQuestionsList();
-                    this.elements.totalQuestions.textContent = this.questions.length;
-                    this.elements.totalQuestionsDisplay.textContent = this.questions.length;
 
-                    // Inicializar na aba de jogo
-                    // Inicializar na aba de jogo apenas na primeira vez
-                    if (this.currentTab === 'game' && !this.gameMode) {
-                        this.switchTab('game');
+                    // Adicionar perguntas padrão se não houver perguntas salvas
+                    if (this.questions.length === 0) {
+                        await this.addDefaultQuestions();
+                        // Recarregar após adicionar perguntas padrão
+                        const newRequest = this.db.transaction(['questions'], 'readonly').objectStore('questions').getAll();
+                        newRequest.onsuccess = () => {
+                            this.questions = newRequest.result;
+                            this.updateQuestionDisplay();
+                        };
+                    } else {
+                        this.updateQuestionDisplay();
                     }
                 };
                 // Garantir que botões estejam escondidos na inicialização
                 this.elements.nextBtn.style.display = 'none';
                 this.elements.stopGameBtn.style.display = 'none';
+            }
+            async addDefaultQuestions() {
+                const transaction = this.db.transaction(['questions'], 'readwrite');
+                const store = transaction.objectStore('questions');
+
+                for (const question of this.defaultQuestions) {
+                    await store.add(question);
+                }
+            }
+
+            updateQuestionDisplay() {
+                this.filteredQuestions = [...this.questions];
+                this.updateQuestionsList();
+                this.elements.totalQuestions.textContent = this.questions.length;
+                this.elements.totalQuestionsDisplay.textContent = this.questions.length;
+
+                // Inicializar na aba de jogo apenas na primeira vez
+                if (this.currentTab === 'game' && !this.gameMode) {
+                    this.switchTab('game');
+                }
             }
 
             async addQuestion() {
@@ -854,14 +931,20 @@
                     <button class="speech-btn" onclick="game.speakQuestion()">🔊 Ouvir</button>
                 `;
 
+                // Embaralhar opções para aumentar dificuldade
+                const shuffledOptions = this.shuffleOptions(question.options, question.correctAnswer);
+
                 this.elements.optionsContainer.innerHTML = '';
-                question.options.forEach((option, index) => {
+                shuffledOptions.options.forEach((option, index) => {
                     const optionElement = document.createElement('div');
                     optionElement.className = 'option';
                     optionElement.textContent = option;
                     optionElement.addEventListener('click', () => this.selectOption(index));
                     this.elements.optionsContainer.appendChild(optionElement);
                 });
+
+                // Atualizar qual é a resposta correta após embaralhar
+                this.currentCorrectAnswer = shuffledOptions.newCorrectIndex;
 
                 this.elements.currentQuestion.textContent = this.currentQuestionIndex + 1;
                 this.elements.confirmBtn.disabled = true;
@@ -880,6 +963,29 @@
                     feedbackArea.style.display = 'none';
                 }
             }
+            shuffleOptions(options, correctAnswerIndex) {
+                // Criar array com opções e seus índices originais
+                const optionsWithIndex = options.map((option, index) => ({
+                    text: option,
+                    originalIndex: index
+                }));
+
+                // Embaralhar usando algoritmo Fisher-Yates
+                for (let i = optionsWithIndex.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [optionsWithIndex[i], optionsWithIndex[j]] = [optionsWithIndex[j], optionsWithIndex[i]];
+                }
+
+                // Encontrar novo índice da resposta correta
+                const newCorrectIndex = optionsWithIndex.findIndex(
+                    item => item.originalIndex === correctAnswerIndex
+                );
+
+                return {
+                    options: optionsWithIndex.map(item => item.text),
+                    newCorrectIndex: newCorrectIndex
+                };
+            }
 
             selectOption(index) {
                 document.querySelectorAll('.option').forEach(opt => opt.classList.remove('selected'));
@@ -891,13 +997,13 @@
             confirmAnswer() {
                 const question = this.questions[this.currentQuestionIndex];
                 const options = document.querySelectorAll('.option');
-                const isCorrect = this.selectedOption === question.correctAnswer;
+                const isCorrect = this.selectedOption === this.currentCorrectAnswer;
                 const feedbackArea = document.getElementById('feedbackArea');
                 const feedbackText = document.getElementById('feedbackText');
                 const explanationText = document.getElementById('explanationText');
 
                 options.forEach((opt, index) => {
-                    if (index === question.correctAnswer) {
+                    if (index === this.currentCorrectAnswer) {
                         opt.classList.add('correct');
                     } else if (index === this.selectedOption) {
                         opt.classList.add('incorrect');
@@ -926,22 +1032,13 @@
                 feedbackArea.style.display = 'block';
 
                 // Falar o feedback se a opção estiver ativada
-// Falar o feedback se a opção estiver ativada
-if (this.autoSpeechEnabled) {
-    const fullFeedback = question.explanation ? 
-        `${feedbackText.textContent} ${question.explanation}` : feedbackText.textContent;
-    
-    // No mobile, a fala automática só funciona imediatamente após interação do usuário
-    if (this.isMobile()) {
-        // Tentar falar imediatamente (sem setTimeout) pois estamos em contexto de clique
-        this.speakText(fullFeedback);
-    } else {
-        // Desktop pode usar setTimeout
-        setTimeout(() => {
-            this.speakText(fullFeedback);
-        }, 500);
-    }
-}
+                if (this.autoSpeechEnabled) {
+                    const fullFeedback = question.explanation ?
+                        `${feedbackText.textContent} ${question.explanation}` : feedbackText.textContent;
+                    setTimeout(() => {
+                        this.speakText(fullFeedback);
+                    }, 500);
+                }
 
                 this.elements.confirmBtn.style.display = 'none';
                 this.elements.nextBtn.style.display = 'inline-block';
